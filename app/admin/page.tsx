@@ -1,256 +1,255 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import QRCode from 'qrcode.react';
 
-export default function AdminPage() {
+type Candidate = { id: string; name: string; votes: number };
+type Position = { id: string; title: string; candidates: Candidate[] };
+
+export default function AdminDashboard() {
   const [password, setPassword] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [positions, setPositions] = useState<any[]>([]);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [positions, setPositions] = useState<Position[]>([]);
   const [electionStatus, setElectionStatus] = useState<'active' | 'paused' | 'ended'>('active');
-  const [usedStudentIds, setUsedStudentIds] = useState<string[]>([]);
-  
-  // New Position / Candidate Form
   const [newPositionTitle, setNewPositionTitle] = useState('');
+  const [selectedPosId, setSelectedPosId] = useState('');
   const [newCandidateName, setNewCandidateName] = useState('');
-  const [selectedPosForCandidate, setSelectedPosForCandidate] = useState('');
-
-  const [shareableUrl, setShareableUrl] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setShareableUrl(`${window.location.origin}/vote`);
-    }
-  }, []);
-
-  const handleLogin = async () => {
-    const res = await fetch('/api/admin/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    });
-
-    if (res.ok) {
-      setIsLoggedIn(true);
+    if (isAuthenticated) {
       fetchElectionData();
+    }
+  }, [isAuthenticated]);
+
+  const fetchElectionData = async () => {
+    try {
+      const res = await fetch('/api/election');
+      const data = await res.json();
+      setPositions(data.positions || []);
+      setElectionStatus(data.electionStatus || 'active');
+    } catch (err) {
+      console.error('Failed to load election data');
+    }
+  };
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password === 'admin') { // Or your custom password
+      setIsAuthenticated(true);
     } else {
       alert('Incorrect Password');
     }
   };
 
-  const fetchElectionData = async () => {
-    const res = await fetch('/api/election');
-    const data = await res.json();
-    setPositions(data.positions || []);
-    setElectionStatus(data.electionStatus || 'active');
-    setUsedStudentIds(data.usedStudentIds || []);
-  };
+  const handleAddPosition = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPositionTitle.trim()) return;
 
-  const handleAddPosition = async () => {
-    if (!newPositionTitle) return;
-    await fetch('/api/admin/position', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: newPositionTitle, password }),
-    });
+    const newPos: Position = {
+      id: `pos-${Date.now()}`,
+      title: newPositionTitle.trim(),
+      candidates: [],
+    };
+
+    const updatedPositions = [...positions, newPos];
+    await savePositionsToKV(updatedPositions);
     setNewPositionTitle('');
-    fetchElectionData();
   };
 
-  const handleAddCandidate = async () => {
-    if (!newCandidateName || !selectedPosForCandidate) return;
-    await fetch('/api/admin/candidate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ positionId: selectedPosForCandidate, name: newCandidateName, password }),
+  const handleAddCandidate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPosId || !newCandidateName.trim()) return;
+
+    const updatedPositions = positions.map((pos) => {
+      if (pos.id === selectedPosId) {
+        return {
+          ...pos,
+          candidates: [
+            ...pos.candidates,
+            { id: `cand-${Date.now()}`, name: newCandidateName.trim(), votes: 0 },
+          ],
+        };
+      }
+      return pos;
     });
+
+    await savePositionsToKV(updatedPositions);
     setNewCandidateName('');
-    fetchElectionData();
   };
 
-  const handleStatusChange = async (status: string) => {
-    await fetch('/api/admin/status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, password }),
-    });
-    fetchElectionData();
+  const handleResetElection = async () => {
+    if (confirm('Are you sure you want to delete ALL positions and reset the election?')) {
+      await savePositionsToKV([]);
+    }
   };
 
-  const exportCSV = () => {
-    let csv = 'Position,Candidate,Votes\n';
-    positions.forEach((pos) => {
-      pos.candidates.forEach((cand: any) => {
-        csv += `"${pos.title}","${cand.name}",${cand.votes}\n`;
+  const savePositionsToKV = async (newPositions: Position[]) => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          positions: newPositions,
+          electionStatus,
+        }),
       });
-    });
 
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'election_results.csv';
-    a.click();
+      if (res.ok) {
+        setPositions(newPositions);
+      } else {
+        alert('Failed to update election data.');
+      }
+    } catch (err) {
+      alert('Error saving data.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  if (!isLoggedIn) {
+  if (!isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <div className="bg-white p-6 rounded-2xl shadow-lg border border-slate-100 max-w-sm w-full">
-          <h1 className="text-xl font-bold mb-4 text-slate-800">Admin Login</h1>
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+        <form onSubmit={handleLogin} className="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm">
+          <h1 className="text-xl font-bold text-slate-800 mb-4 text-center">Admin Login</h1>
           <input
             type="password"
             placeholder="Enter Admin Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full p-3 border rounded-xl mb-4 text-sm"
+            className="w-full border border-slate-300 rounded-xl px-4 py-3 mb-4 focus:outline-none focus:border-indigo-500"
           />
           <button
-            onClick={handleLogin}
-            className="w-full bg-slate-900 text-white py-3 rounded-xl font-semibold text-sm hover:bg-slate-800"
+            type="submit"
+            className="w-full bg-indigo-600 text-white font-semibold py-3 rounded-xl hover:bg-indigo-700 transition"
           >
             Access Dashboard
           </button>
-        </div>
+        </form>
       </div>
     );
   }
 
+  const totalVotesAcrossAll = positions.reduce(
+    (acc, pos) => acc + pos.candidates.reduce((cAcc, c) => cAcc + c.votes, 0),
+    0
+  );
+
   return (
-    <div className="min-h-screen bg-slate-50 p-6 max-w-4xl mx-auto">
-      <header className="flex items-center justify-between mb-8 pb-4 border-b">
+    <div className="min-h-screen bg-slate-50 p-6 max-w-5xl mx-auto">
+      <div className="flex justify-between items-center mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Election Admin Panel</h1>
-          <p className="text-xs text-slate-500">Total Voters Recorded: {usedStudentIds.length}</p>
+          <h1 className="text-3xl font-bold text-slate-900">Election Admin Dashboard</h1>
+          <p className="text-slate-500 text-sm mt-1">Manage positions, candidates, and live results</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => handleStatusChange('active')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg ${
-              electionStatus === 'active' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-700'
-            }`}
-          >
-            Active
-          </button>
-          <button
-            onClick={() => handleStatusChange('paused')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg ${
-              electionStatus === 'paused' ? 'bg-amber-500 text-white' : 'bg-slate-200 text-slate-700'
-            }`}
-          >
-            Pause
-          </button>
-          <button
-            onClick={() => handleStatusChange('ended')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg ${
-              electionStatus === 'ended' ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'
-            }`}
-          >
-            End
-          </button>
-        </div>
-      </header>
+        <button
+          onClick={handleResetElection}
+          className="bg-red-50 text-red-600 border border-red-200 text-sm font-semibold px-4 py-2 rounded-xl hover:bg-red-100 transition"
+        >
+          Reset All Data
+        </button>
+      </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {/* QR Code Section */}
-        <div className="bg-white p-6 rounded-2xl border shadow-sm flex flex-col items-center text-center">
-          <h3 className="font-bold text-sm mb-4 text-slate-700">Voter Portal QR Code</h3>
-          {shareableUrl && <QRCode value={shareableUrl} size={150} />}
-          <p className="text-xs text-slate-400 mt-4 break-all">{shareableUrl}</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        {/* Add Position Card */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <h2 className="font-bold text-lg text-slate-800 mb-4">1. Add Position</h2>
+          <form onSubmit={handleAddPosition} className="space-y-4">
+            <input
+              type="text"
+              placeholder="e.g. President"
+              value={newPositionTitle}
+              onChange={(e) => setNewPositionTitle(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500"
+            />
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-indigo-600 text-white font-semibold py-3 rounded-xl hover:bg-indigo-700 transition disabled:bg-slate-300"
+            >
+              Add Position
+            </button>
+          </form>
         </div>
 
-        {/* Add Position */}
-        <div className="bg-white p-6 rounded-2xl border shadow-sm">
-          <h3 className="font-bold text-sm mb-4 text-slate-700">1. Add Position</h3>
-          <input
-            type="text"
-            placeholder="e.g. President"
-            value={newPositionTitle}
-            onChange={(e) => setNewPositionTitle(e.target.value)}
-            className="w-full p-2.5 border rounded-lg text-sm mb-3"
-          />
-          <button
-            onClick={handleAddPosition}
-            className="w-full bg-indigo-600 text-white text-xs font-semibold py-2.5 rounded-lg"
-          >
-            Add Position
-          </button>
-        </div>
+        {/* Add Candidate Card */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <h2 className="font-bold text-lg text-slate-800 mb-4">2. Add Candidate</h2>
+          <form onSubmit={handleAddCandidate} className="space-y-4">
+            <select
+              value={selectedPosId}
+              onChange={(e) => setSelectedPosId(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500 bg-white"
+            >
+              <option value="">Select Position</option>
+              {positions.map((pos) => (
+                <option key={pos.id} value={pos.id}>
+                  {pos.title}
+                </option>
+              ))}
+            </select>
 
-        {/* Add Candidate */}
-        <div className="bg-white p-6 rounded-2xl border shadow-sm">
-          <h3 className="font-bold text-sm mb-4 text-slate-700">2. Add Candidate</h3>
-          <select
-            value={selectedPosForCandidate}
-            onChange={(e) => setSelectedPosForCandidate(e.target.value)}
-            className="w-full p-2.5 border rounded-lg text-sm mb-3"
-          >
-            <option value="">Select Position</option>
-            {positions.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.title}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            placeholder="Candidate Name"
-            value={newCandidateName}
-            onChange={(e) => setNewCandidateName(e.target.value)}
-            className="w-full p-2.5 border rounded-lg text-sm mb-3"
-          />
-          <button
-            onClick={handleAddCandidate}
-            className="w-full bg-indigo-600 text-white text-xs font-semibold py-2.5 rounded-lg"
-          >
-            Add Candidate
-          </button>
+            <input
+              type="text"
+              placeholder="Candidate Name"
+              value={newCandidateName}
+              onChange={(e) => setNewCandidateName(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500"
+            />
+
+            <button
+              type="submit"
+              disabled={loading || !selectedPosId}
+              className="w-full bg-indigo-600 text-white font-semibold py-3 rounded-xl hover:bg-indigo-700 transition disabled:bg-slate-300"
+            >
+              Add Candidate
+            </button>
+          </form>
         </div>
       </div>
 
-      {/* Results Section */}
-      <div className="bg-white p-6 rounded-2xl border shadow-sm">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="font-bold text-slate-800">Live Election Results</h3>
-          <button
-            onClick={exportCSV}
-            className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-semibold"
-          >
-            Export CSV
-          </button>
-        </div>
+      {/* Results / Candidates Overview */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+        <h2 className="font-bold text-xl text-slate-800 mb-6">Live Election Results</h2>
 
-        {positions.map((pos) => {
-          const totalVotesForPos = pos.candidates.reduce((sum: number, c: any) => sum + (c.votes || 0), 0);
+        {positions.length === 0 ? (
+          <div className="text-center py-12 text-slate-400">
+            No positions created yet. Add a position above to get started!
+          </div>
+        ) : (
+          positions.map((pos) => {
+            const posTotalVotes = pos.candidates.reduce((acc, c) => acc + c.votes, 0);
 
-          return (
-            <div key={pos.id} className="mb-6 pb-6 border-b last:border-0">
-              <h4 className="font-semibold text-slate-700 mb-3">{pos.title}</h4>
-              <div className="space-y-3">
-                {pos.candidates.map((cand: any) => {
-                  const pct = totalVotesForPos > 0 ? Math.round((cand.votes / totalVotesForPos) * 100) : 0;
-
-                  return (
-                    <div key={cand.id}>
-                      <div className="flex justify-between text-xs font-medium text-slate-600 mb-1">
-                        <span>{cand.name}</span>
-                        <span>
-                          {cand.votes} votes ({pct}%)
-                        </span>
-                      </div>
-                      <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
-                        <div
-                          className="bg-indigo-600 h-3 rounded-full transition-all duration-500"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+            return (
+              <div key={pos.id} className="mb-8 last:mb-0">
+                <h3 className="font-bold text-lg text-slate-700 mb-3">{pos.title}</h3>
+                {pos.candidates.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">No candidates added to this position yet.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {pos.candidates.map((candidate) => {
+                      const percentage = posTotalVotes > 0 ? Math.round((candidate.votes / posTotalVotes) * 100) : 0;
+                      return (
+                        <div key={candidate.id} className="bg-slate-50 p-4 rounded-xl">
+                          <div className="flex justify-between text-sm font-semibold text-slate-800 mb-1">
+                            <span>{candidate.name}</span>
+                            <span>{candidate.votes} votes ({percentage}%)</span>
+                          </div>
+                          <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                            <div
+                              className="bg-indigo-600 h-2.5 rounded-full transition-all duration-500"
+                              style={{ width: `${percentage}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
     </div>
   );
